@@ -1,8 +1,92 @@
+// initialize
+var express = require('express'),
+fs      = require('fs'),
+app     = express(),
+eps     = require('ejs'),
+morgan  = require('morgan');
+
+// Amazon Rek
 const AWS = require('aws-sdk');
 const path = require("path");
-const fs = require("fs");
+const BUCKET_NAME = 'rekognition-test';
 
-const BUCKET_NAME = `rekognition-demo-1`;
+// Local ffmpeg
+var spawn = require('child_process').spawn;
+var cmd = '/home/ubuntu/bin/ffmpeg';
+var args = [
+    '-y', 
+    '-i', '/home/ubuntu/input.flv',
+    '-s', '640x480', 
+    '-codec:a', 'aac', 
+    '-b:a', '44.1k', 
+    '-r', '15', 
+    '-b:v', '1000k', 
+    '-c:v','h264', 
+    '-f', 'mp4', '/home/ubuntu/output.mp4'
+];
+
+var async = require('async');
+var http = require("http");
+var https = require("https");
+var apn = require('apn');
+
+Object.assign=require('object-assign')
+
+app.engine('html', require('ejs').renderFile);
+app.use(morgan('combined'))
+
+var getDateTime = function() {
+  var date = new Date();
+  var hour = date.getHours();
+  hour = (hour < 10 ? "0" : "") + hour;
+  var min  = date.getMinutes();
+  min = (min < 10 ? "0" : "") + min;
+  var sec  = date.getSeconds();
+  sec = (sec < 10 ? "0" : "") + sec;
+  var year = date.getFullYear();
+  var month = date.getMonth() + 1;
+  month = (month < 10 ? "0" : "") + month;
+  var day  = date.getDate();
+  day = (day < 10 ? "0" : "") + day;
+
+  return year + "-" + month + "-" + day + " " + hour + ":";// + min;// + ":" + sec;
+}
+
+app.get('/', function (req, res) {
+  // try to initialize the db on every request if it's not already
+  // initialized.
+  var link = "Images/180404-floppy.png";
+  res.send("<html><body><img src='" + link + "'></body></html>");
+});
+
+// error handling
+app.use(function(err, req, res, next){
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  console.error(err.stack);
+  res.status(500).send('Something bad happened!');
+});
+
+var ip = '127.0.0.1';
+var port = 8080;
+app.listen(port, ip);
+console.log('Server running on http://%s:%s', ip, port);
+module.exports = app;
+
+function runFFMpeg(){
+  var proc = spawn(cmd, args);
+
+  proc.stdout.on('data', function(data) {
+      console.log(data);
+  });
+  
+  proc.stderr.on('data', function(data) {
+      console.log(data);
+  });
+  
+  proc.on('close', function() {
+      console.log('finished');
+  });  
+}
 
 function getImageMetadata(){
   return new Promise((resolve, reject)=>{
@@ -183,17 +267,18 @@ Upload all images to the S3 bucket.
 Only upload images that don't already exist.
 Recognize labels for each image
 */
+function runS3BucketUpload(){
+  Promise.all([getImageMetadata(), createIfNotExistsBucket(BUCKET_NAME)]).then((results)=>{
+    const [images, bucketObjectKeys] = results;
 
-Promise.all([getImageMetadata(), createIfNotExistsBucket(BUCKET_NAME)]).then((results)=>{
-  const [images, bucketObjectKeys] = results;
+    return processImages(images, bucketObjectKeys)
+      .then(labelImages)
+      .then(saveLabeledImages)
+      .then(_=> {
+        console.log("done!");
+      });
 
-  return processImages(images, bucketObjectKeys)
-    .then(labelImages)
-    .then(saveLabeledImages)
-    .then(_=> {
-      console.log("done!");
-    });
-
-}).catch(err => {
-    console.log(err);
-});
+  }).catch(err => {
+      console.log(err);
+  });
+}
